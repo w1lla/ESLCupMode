@@ -1,0 +1,31 @@
+ESL CupMode:
+Original sources:
+
+http://www.svenstucki.ch/hp/node/9
+http://www.esl.eu/eu/tmnf/news/115154/The-new-ESL-Cupmode-/
+
+What to do:
+Download the latest manialive and set it up. http://www.manialive.com
+Download the source files from GitHub. see above ^^
+Extract the files towards: libraries/ManiaLivePlugins/
+Set in the config.ini the following lines:
+
+manialive.plugins[] = 'ESLCupMode\CupMode'
+
+Then save the config and start the plugin.
+
+The plugin has some basic things like /eslcup activate to start the special ESL mode.
+
+/eslcup disable stops the plugin.
+/eslcup restore restores the last value of config.
+/eslcup limit x will set the limit for cupmode.
+
+What to do:
+- Graphical User Interface.
+- Make everything work based on BeginRound, EndRound etc.
+- Test everything properly out. 
+
+If there are more ideas please contact me on MP Forum aswell as through the usual accounts.
+
+ManiaPlanet Dedicated Bug:
+Appartenly the dedicated server can go towards 3200 points for CupMode.
