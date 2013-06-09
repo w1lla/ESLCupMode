@@ -61,8 +61,8 @@ class CupMode extends \ManiaLive\PluginHandler\Plugin {
 
 	function onLoad() {
 
-		$this->enableDatabase();
-		$this->enableDedicatedEvents();
+        $this->enableStorageEvents();
+        $this->enableDedicatedEvents();
 		
 		$admins = AdminGroup::get();
 		
@@ -166,7 +166,7 @@ class CupMode extends \ManiaLive\PluginHandler\Plugin {
 				$finalists[] = $login;
 		}
 		
-		var_dump($this->out_ptslimit);
+		//var_dump($this->out_ptslimit);
 		Console::println('Restoring eslcup state. Variable dump:');
 		Console::println('(limit - out_ptslimit) = ('.$this->limit['CurrentValue'].' - '.$this->out_ptslimit['CurrentValue'].')' );
 		$this->connection->chatSendServerMessage('ESL CupMode Reactivated.', $login);
@@ -223,5 +223,194 @@ class CupMode extends \ManiaLive\PluginHandler\Plugin {
 		return $out;
 
 	}
+	
+	
+	// Invoke a ForceScores call for a specific player login
+	public function setPlayerScore( $login, $score ) {
+		global $_players;
+		$this->connection->forceScores(( Array( "PlayerId" => $_players[$login]['PlayerId'], "Score" => $score ) ), true);
+	}
+	
+	public function onPlayerFinish($playerUid, $login, $timeOrScore) {
+		
+		if( $timeOrScore <= 0 )
+			return;
+		
+		Console::println('[' . date('H:i:s') . '] Player '.$login.' finished with time '.$timeOrScore.'.');
+		$this->finishers[$timeOrScore] = $login;
+		
+	}
+	
+	public function onBeginRound(){
+	
+	Console::println('[' . date('H:i:s') . '] onBeginRound ');
+		
+		// Recalculate ptslimit (as this cb also gets called after a mapchange) and check for next map bug
+		$scores = $this->playersGetScore();
+		$max_pl = 0;
+		$bug_winner = false;
+		foreach( $scores as $login => &$pl ) {
+			if( $login == @$this->winner['Login'] ) {
+				// Check for next map bug
+				$score = $pl['Score'];
+				if( $score < 0 )
+					Console::println('[' . date('H:i:s') . '] Last winner disconnected.');
+				else if( $score > 0 ) {
+					if( !($score > $this->limit['CurrentValue'] * 2) ) {
+						Console::println('[' . date('H:i:s') . '] Last winner is no more a winner and has a score >0. Fixing bug.');
+						$this->setPlayerScore( $this->winner['Login'], $this->winner['Score'] );
+						Console::println('[' . date('H:i:s') . '] Set score to  '. $this->winner['Score'] . ' and make player a spectator.');
+						$this->connection->forceSpectator($this->winner['Login'], 1 );
+						$this->connection->forceSpectator($this->winner['Login'], 0 );
+						$bug_winner = true;
+					} else
+						Console::println('[' . date('H:i:s') . '] Last winner is still a winner.');
+				} else
+					Console::println('[' . date('H:i:s') . '] Last winner has score 0, so race was restarted.');
+				$this->winner['Login'] = "";
+			} else {
+				// Calculate pointslimit
+				if( $pl['Score'] <= $this->limit*2 and $pl['Score'] > $max_pl )
+					$max_pl = $pl['Score'];
+			}
+		}
+		$this->out_ptslimit = max( $max_pl, $this->limit );
+		Console::println('[' . date('H:i:s') . '] New pointslimit: '.$this->out_ptslimit.' (max_pl = '.$max_pl.').');
+		
+		// Count winners (in case of endround/nextmap bug, the endround cb can't count it himself)
+		$this->winners = 0;
+		foreach( $scores as $login => &$pl ) {
+			if( $pl['Score'] > $this->limit*2 )
+				$this->winners++;
+		}
+		if( $bug_winner )
+			$this->winners++;
+		Console::println('[' . date('H:i:s') . '] Counted number of winners is '.$this->winners.'.' );
+		
+		/*// Fix round end bug
+		if( $this->roundendbug ) {
+			$this->if->log( "Fixing round end bug." );
+			$scores = $this->if->playersGetScore();
+			$rpoints = $this->if->getRoundCustomPoints();
+			$update = Array();
+			foreach( $scores as $login => &$pl ) {
+				if( $pl['Score'] - $rpoints[0] >= $this->out_ptslimit ) {
+					$this->winners++;
+					$update[] = Array( "PlayerId" => $pl['PlayerId'], "Score" => $this->limit*2 + $this->if->getCupNbWinners() - $this->winners + 1 );
+					$this->if->log( "Player {$login} is new winner! Points set to " . $update[0]['Score'] . ", number of winners is {$this->winners} and CupNbWinners is " . $this->if->getCupNbWinners() . "." );
+				}
+				// Update winners score
+				if( count($update) > 0 )
+					$this->if->serverCall( "ForceScores", $update, true );
+			}
+			$this->roundendbug = false;
+		}*/
+		
+		// Reset finishers/finalists array on round start
+		unset( $this->finishers ); $this->finishers = array();
+		unset( $this->finalists ); $this->finalists = array();
+		
+		// Build finalists array
+		$scores = $this->if->playersGetScore( true );
+		foreach( $scores as $login => &$pl ) {
+			if( $pl['Score'] == $this->out_ptslimit ) {
+				$this->finalists[] = $login;
+				Console::println('[' . date('H:i:s') . '] '.$login .' (score = '. $pl['Score'] . ') is a finalist!' );
+			} else {
+				Console::println('[' . date('H:i:s') . '] '.$login.' (score = ' . $pl['Score'] . ') is no finalist.' );
+			}
+		}
+		
+		// Update manialink
+		//if( $this->state )
+		//	$this->mlUpdateXml();
+	
+	}
+	
+	public function onEndRound() {
+	
+		// Return when disabled
+		if( !$this->state ) {
+			unset( $this->finishers ); $this->finishers = array();
+			return;
+		}
+		
+		// Return when noone finished
+		if( count($this->finishers) < 1 )
+			return;
+		
+		// Fetch first finisher
+		ksort( $this->finishers );
+		foreach( $this->finishers as $time => $login ) {
+			// foreach is only used to determine first entry
+			break;
+		}
+		Console::println('[' . date('H:i:s') . '] onEndRound ');
+		Console::println('[' . date('H:i:s') . '] Player '.$login.' with time '.$time.' finished first.' );
+		//$this->if->log( "- out_ptslimit = " . $this->out_ptslimit );
+		//$this->if->log( "- limit = " . $this->limit );
+		//$this->if->log( "- winners (before) = " . $this->winners );
+		
+		// Prepare winner check
+		$scores = $this->playersGetScore();
+		$rpoints = $this->connection->getRoundCustomPoints();
+		$update = Array();
+		$new_winner = "";
+		/*// Check for round end zero bug
+		$this->if->log( "Cecking for round end bug, Score = " . $scores[$login]['Score'] );
+		if( $scores[$login]['Score'] < 1 ) {
+			$this->if->log( "Detected. Trying to fetch newest ranking." );
+			$scores = $this->if->playersGetScore( true );	
+		}
+		if( $scores[$login]['Score'] < 1 ) {
+			$this->if->log( "Not solved." );
+			$this->if->chat( "FUUUUUUCKING ROUND END BUG DETECTED!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" );
+			$this->roundendbug = true;
+		}
+		if( ($scores[$login]['Score'] - $rpoints[0]) >= $this->out_ptslimit ) {
+			// As were doing this at endround, we have to check if he really was finalist before
+			$this->winners++;
+			$update[] = Array( "PlayerId" => $scores[$login]['PlayerId'], "Score" => $this->limit*2 + $this->if->getCupNbWinners() - $this->winners + 1 );
+			$new_winner = $login;
+			$this->if->log( "Player {$login} is new winner! Points set to " . $update[0]['Score'] . ", number of winners is {$this->winners} and CupNbWinners is " . $this->if->getCupNbWinners() . "." );
+		}*/
+		// See if first finisher is a finalist (->winner)
+		if( in_array( $login, $this->finalists ) ) {
+			$new_winner = $login;
+			// Update player score
+			$update[] = Array( "PlayerId" => $scores[$new_winner]['PlayerId'], "Score" => $this->limit*2 + $this->if->getCupNbWinners() - $this->winners + 1 );
+			$this->winner = array( "Login" => $new_winner, "Score" => $update[0]['Score'] );
+			Console::println('[' . date('H:i:s') . '] Player '.$login.' is a winner. Setting score to '. $update[0]['Score'] . '.' );
+		} else {
+			Console::println('[' . date('H:i:s') . '] No luck, '.$login.' is not a winner :/' );
+		}
+		// Update winners score
+		if( count($update) > 0 )
+			$this->connection->forceScores($update, true);
+		
+		//$this->if->log( "- score = " . $scores[$login]['Score'] );
+		//$this->if->log( "- count(update) = " . count($update) );
+		
+		// Recalculate pointslimit
+		$update = Array(); $max_pl = 0;
+		foreach( $scores as $login => &$pl ) {
+			// Search max player score
+			if( $pl['Score'] > $max_pl && $pl['Score'] <= 2*$this->limit ) {
+				// This player has current max score and is not a winner, check if it's the new winner
+				if( $login != $new_winner )
+					$max_pl = $pl['Score'];
+			}
+		}
+		$this->out_ptslimit = max( $max_pl, $this->limit );
+		Console::println('[' . date('H:i:s') . '] New out_ptslimit = ' . $this->out_ptslimit . '; max_pl = ' . $max_pl.'');
+		
+		// Empty finishers array
+		unset($this->finishers); $this->finishers = array();
+		
+		// Update manialink markup
+		//$this->mlUpdateXml();
+		
+	}
+	
 }
 ?>
