@@ -48,7 +48,6 @@ class CupMode extends \ManiaLive\PluginHandler\Plugin {
 	public $roundendbug = false;	// Denotes if roundendbug has to be fixed
 
 	// Output for display
-	public $out_manialink = "";	// Standard manialink
 	public $out_ptslimit = 0;	// Current pointslimit
 	public $out_widget = "";	// Second manialink with cup scores
 	public $out_widget_to = 0;	// Display widget only to spectators (2), players would be (1) and both (0)
@@ -73,6 +72,10 @@ class CupMode extends \ManiaLive\PluginHandler\Plugin {
 		$cmd->help = 'ESL Cupmode.';
 		
 		Console::println('[' . date('H:i:s') . '] [ESLCupMode] ESL CupMode v' . $this->getVersion());
+		$this->connection->setApiVersion('');
+		Console::println('[' . date('H:i:s') . '] [ESLCupMode] SetApiVersion');
+		$apiversion = $this->connection->getVersion();
+		Console::println('[' . date('H:i:s') . '] [ESLCupMode] GetApiVersion '.$apiversion->apiVersion.'');
 		$this->connection->chatSendServerMessage('eslcup: rev. ' . $this->getVersion() . ' loaded');
 		
 	}
@@ -114,8 +117,8 @@ class CupMode extends \ManiaLive\PluginHandler\Plugin {
 			// Make necessary calls
 			$this->changeLimit($this->limit);
 			// Update manialink xml
-			//$this->out_ptslimit = $this->limit;
-			//$this->mlUpdateXml();
+			$this->out_ptslimit = $this->limit;
+			$this->mlUpdateXml();
 		}
 		$this->connection->chatSendServerMessage('ESL CupMode Activated.', $login);
 		return;
@@ -158,11 +161,11 @@ class CupMode extends \ManiaLive\PluginHandler\Plugin {
 				$max_pl = $pl['Score'];
 		}
 		$this->out_ptslimit = max( $max_pl, $this->limit );
-		//$this->mlUpdateXml();
+		$this->mlUpdateXml();
 		
 		// Search for finalists
 		foreach( $scores as $login => &$pl ) {
-			if( $pl['Score'] == $this->out_ptslimit )
+			if( $pl['Score'] == $this->out_ptslimit['CurrentValue'] )
 				$finalists[] = $login;
 		}
 		
@@ -187,6 +190,7 @@ class CupMode extends \ManiaLive\PluginHandler\Plugin {
 			$this->winnerScore( $this->limit, $type);
 		}
 		$this->limit = $v;
+		//var_dump($this->limit);
 		//$this->mlUpdateXml();
 		if($endround){
 		$this->connection->forceEndRound();
@@ -211,8 +215,6 @@ class CupMode extends \ManiaLive\PluginHandler\Plugin {
 	}
 	
 	public function playersGetScore($query = false) {
-		/*global $_players;
-		return $_players;*/
 		// Uses $_Ranking to get most accurate scores
 		global $_Ranking;
 		$out = Array();
@@ -241,10 +243,10 @@ class CupMode extends \ManiaLive\PluginHandler\Plugin {
 		
 	}
 	
-	public function onBeginRound(){
+	function onBeginRound(){
 	
 	Console::println('[' . date('H:i:s') . '] onBeginRound ');
-		
+	//$this->connection->chatSendServerMessage('BeginRound');	
 		// Recalculate ptslimit (as this cb also gets called after a mapchange) and check for next map bug
 		$scores = $this->playersGetScore();
 		$max_pl = 0;
@@ -270,17 +272,17 @@ class CupMode extends \ManiaLive\PluginHandler\Plugin {
 				$this->winner['Login'] = "";
 			} else {
 				// Calculate pointslimit
-				if( $pl['Score'] <= $this->limit*2 and $pl['Score'] > $max_pl )
+				if( $pl['Score'] <= $this->limit['CurrentValue'] * 2 and $pl['Score'] > $max_pl )
 					$max_pl = $pl['Score'];
 			}
 		}
 		$this->out_ptslimit = max( $max_pl, $this->limit );
-		Console::println('[' . date('H:i:s') . '] New pointslimit: '.$this->out_ptslimit.' (max_pl = '.$max_pl.').');
+		Console::println('[' . date('H:i:s') . '] New pointslimit: '.$this->out_ptslimit['CurrentValue'].' (max_pl = '.$max_pl.').');
 		
 		// Count winners (in case of endround/nextmap bug, the endround cb can't count it himself)
 		$this->winners = 0;
 		foreach( $scores as $login => &$pl ) {
-			if( $pl['Score'] > $this->limit*2 )
+			if( $pl['Score'] > $this->limit['CurrentValue']*2 )
 				$this->winners++;
 		}
 		if( $bug_winner )
@@ -311,9 +313,9 @@ class CupMode extends \ManiaLive\PluginHandler\Plugin {
 		unset( $this->finalists ); $this->finalists = array();
 		
 		// Build finalists array
-		$scores = $this->if->playersGetScore( true );
+		$scores = $this->playersGetScore( true );
 		foreach( $scores as $login => &$pl ) {
-			if( $pl['Score'] == $this->out_ptslimit ) {
+			if( $pl['Score'] == $this->limit['CurrentValue']) {
 				$this->finalists[] = $login;
 				Console::println('[' . date('H:i:s') . '] '.$login .' (score = '. $pl['Score'] . ') is a finalist!' );
 			} else {
@@ -322,13 +324,13 @@ class CupMode extends \ManiaLive\PluginHandler\Plugin {
 		}
 		
 		// Update manialink
-		//if( $this->state )
-		//	$this->mlUpdateXml();
+		if( $this->state )
+			$this->mlUpdateXml();
 	
 	}
 	
-	public function onEndRound() {
-	
+	function onEndRound() {
+	Console::println('[' . date('H:i:s') . '] onEndRound ');
 		// Return when disabled
 		if( !$this->state ) {
 			unset( $this->finishers ); $this->finishers = array();
@@ -378,7 +380,9 @@ class CupMode extends \ManiaLive\PluginHandler\Plugin {
 		if( in_array( $login, $this->finalists ) ) {
 			$new_winner = $login;
 			// Update player score
-			$update[] = Array( "PlayerId" => $scores[$new_winner]['PlayerId'], "Score" => $this->limit*2 + $this->if->getCupNbWinners() - $this->winners + 1 );
+			$GetCupWinners = $this->connection->getCupNbWinners();
+			$CurrentCupWinners = $GetCupWinners['CurrentValue'];
+			$update[] = Array( "PlayerId" => $scores[$new_winner]['PlayerId'], "Score" => $this->limit['CurrentValue']*2 + $CurrentCupWinners - $this->winners + 1 );
 			$this->winner = array( "Login" => $new_winner, "Score" => $update[0]['Score'] );
 			Console::println('[' . date('H:i:s') . '] Player '.$login.' is a winner. Setting score to '. $update[0]['Score'] . '.' );
 		} else {
@@ -395,22 +399,102 @@ class CupMode extends \ManiaLive\PluginHandler\Plugin {
 		$update = Array(); $max_pl = 0;
 		foreach( $scores as $login => &$pl ) {
 			// Search max player score
-			if( $pl['Score'] > $max_pl && $pl['Score'] <= 2*$this->limit ) {
+			if( $pl['Score'] > $max_pl && $pl['Score'] <= 2*$this->limit['CurrentValue'] ) {
 				// This player has current max score and is not a winner, check if it's the new winner
 				if( $login != $new_winner )
 					$max_pl = $pl['Score'];
 			}
 		}
 		$this->out_ptslimit = max( $max_pl, $this->limit );
-		Console::println('[' . date('H:i:s') . '] New out_ptslimit = ' . $this->out_ptslimit . '; max_pl = ' . $max_pl.'');
+		Console::println('[' . date('H:i:s') . '] New out_ptslimit = ' . $this->out_ptslimit['CurrentValue'] . '; max_pl = ' . $max_pl.'');
 		
 		// Empty finishers array
 		unset($this->finishers); $this->finishers = array();
 		
 		// Update manialink markup
-		//$this->mlUpdateXml();
+		$this->mlUpdateXml();
 		
 	}
+	
+	function mlUpdateXml() {
+	
+		// Live cup points widget
+		// Prepare header, fill in height and position
+		$this->out_widget = $this->tpl_widget_header;
+		$this->out_widget = str_replace( array("#y#","#h#"),
+			array( $this->out_widget_n * 10, $this->out_widget_n*4 + 1.1 ),
+			$this->out_widget );
+		
+		// Generate content
+		$ranking = $this->connection->getCurrentRanking(256, 0);
+		$srch = array( "#y#", "#icon#", "#score#", "#nick#" );
+		$y = 0;
+		foreach( $ranking as $i => &$r ) {
+		$spectator = $this->storage->getPlayerObject($r->login);
+		//var_dump($spectator);
+			if( $spectator->isSpectator )
+				continue;
+			$icon = "";
+			$score = '$eee' . $r->score;
+			if( $r->score == $this->out_ptslimit ) {
+				$icon = 'style="Icons128x128_1" substyle="Hard" ';
+			} else if( $r->score > $this->out_ptslimit ) {
+				$icon = 'style="Icons128x128_1" substyle="Easy" ';
+				$score = '$ddd$w--';
+			}
+			$this->out_widget .= str_replace( $srch,
+				array( $y, $icon, $score, $r->nickName ),
+				$this->tpl_widget_entry );
+			$y = $y - 3;
+			if( $y < ($this->out_widget_n-1)*-3 )
+				break;
+		}
+		
+		// Finish widget
+		$this->out_widget .= $this->tpl_widget_footer;
+			var_dump($this->out_widget);
+	}
+
+
+	public $tpl_widget_header = '
+			<manialink version="1" background="">
+		<frame posn="-55 -29 1" sizen="64 16" halign="left" valign="center">
+			<quad posn="0 0 -1" sizen="20 4" halign="left" valign="center" style="Bgs1InRace" substyle="BgWindow2" />
+			<label posn="10 0.2 1" sizen="20 4" halign="center" valign="center" textsize="3" text="Pointslimit:" />
+		</frame>
+		<frame posn="-63 17 1" sizen="128 96" halign="center" valign="center" scale="5">
+			<quad posn="0 0 0" sizen="2.08 2.66" halign="left" valign="center" url="http://www.svenstucki.ch/hp/node/9" image="http://gfx.esl.eu/media/eu/tmnf/News/Bilder/eslcupmode.png" imagefocus="http://gfx.esl.eu/media/eu/tmnf/News/Bilder/eslcupmode_solid.png" />
+		</frame>
+<frame posn="55.7 -11 1" halign="center" valign="bottom" scale="0.8">
+<!-- Helper frame (takes scaling from parent into account) (y=n*3-12) //-->
+<frame posn="0 #y# 0" halign="center" valign="bottom">
+	
+	<!-- Title //-->
+	<quad sizen="16 2.2" halign="center" valign="top" posn="0 2.1 0" style="Bgs1InRace" substyle="NavButton" />
+	<format textsize="1.5" />
+	<label sizen="16 2" halign="center" valign="top" posn="0 1.8 0" text="$wCup Scores" />
+	
+	<!-- Window (height=n*3+1.1) //-->
+	<quad sizen="20 #h#" halign="center" posn="0 0 -1" style="Bgs1InRace" substyle="NavButton" />
+	
+	<!-- Content (width:19) //-->
+	<frame posn="-9.8 -1.1 0" halign="center" valign="center" scale="1">
+';
+	public $tpl_widget_entry = '
+		<!-- Entry //-->
+		<frame posn="0 #y# 0" halign="center" valign="center" >
+			<quad posn="0 0.5 0" sizen="3 3" #icon#/>
+			<label posn="5.5 0 0" halign="right" sizen="2.5 3" textsize="2" text="#score#" />
+			<label posn="6 0 0" sizen="12 3" textsize="2" text="#nick#" />
+		</frame>
+';
+	public $tpl_widget_footer = '
+	</frame>
+	
+</frame>
+</frame>
+</manialink>
+';
 	
 }
 ?>
